@@ -1,0 +1,30 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- none
+
+name: '$(Build.DefinitionName)-$(SourceBranchName)-$(rev:r)'
+
+pool:
+  vmImage: windows-latest
+
+steps:
+- script: echo Deploying IaC of Integration using YAML file
+  displayName: 'Deploy IaC of POSJSONReceipt'
+
+- task: AzureResourceManagerTemplateDeployment@3
+  inputs:
+    deploymentScope: 'Resource Group'
+    azureResourceManagerConnection: 'Dev/Test Ops'
+    subscriptionId: ''
+    action: 'Create Or Update Resource Group'
+    resourceGroupName: 'rg-test-weu-dev'
+    location: 'West Europe'
+    templateLocation: 'Linked artifact'
+    csmFile: 'IaC/IaC.bicep'
+    csmParametersFile: 'IaC/IaC.parameters.json'
+    overrideParameters: -IntegrationName "" -StorageAccShortName "" -Location westeurope -Enviroment Dev
+    deploymentMode: 'Incremental'
