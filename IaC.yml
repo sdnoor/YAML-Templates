@@ -13,7 +13,7 @@ pool:
 
 steps:
 - script: echo Deploying IaC of Integration using YAML file
-  displayName: 'Deploy IaC of POSJSONReceipt'
+  displayName: 'Deploy IaC of Integration'
 
 - task: AzureResourceManagerTemplateDeployment@3
   inputs:
