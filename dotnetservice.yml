@@ -1,0 +1,86 @@
+trigger:
+  branches:
+   include:
+     - QA
+     - master
+  paths:
+    include:
+      - src/Service/**
+
+name: '$(Build.DefinitionName)-$(SourceBranchName)-$(rev:r)'
+
+variables:
+  buildConfiguration: Release
+  dotnetSdkVersion: '8.x'
+
+pool:
+  vmImage: windows-latest
+
+stages:
+  - stage: 'Build'
+    displayName: IntegrationName-Service-CI
+    jobs:
+      - job: 'Build'
+        displayName: 'Build .NET Code'
+        pool:
+          vmImage: 'windows-latest'
+
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Use .NET SDK $(dotnetSdkVersion)'
+            inputs:
+              packageType: 'sdk'
+              version: '8.x'
+            
+          - task: DotNetCoreCLI@2
+            displayName: 'Restore project dependencies'
+            inputs:
+              azureSubscription: 'Dev/Test Ops'
+              command: 'restore'
+              projects: '$(Build.SourcesDirectory)/src/Service.csproj'
+              vstsFeed: ''
+              
+          - task: DotNetCoreCLI@2
+            displayName: 'Build the project - $(buildConfiguration)'
+            inputs:
+              azureSubscription: 'Dev/Test Subscription'
+              command: 'build'
+              projects: '$(Build.SourcesDirectory)/src/POSJSON.Service/POSJSON.Service.csproj'
+              arguments: '--configuration $(BuildConfiguration)'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Publish the project - $(buildConfiguration)'
+            inputs:
+              azureSubscription: 'Matas Dev/Test Operations'
+              command: 'publish'
+              zipAfterPublish: true
+              publishWebProjects: false
+              projects: '$(Build.SourcesDirectory)/src/POSJSON.Service/POSJSON.Service.csproj'
+              arguments: '--configuration $(BuildConfiguration) --output $(build.artifactstagingdirectory)'
+              
+          - task: PublishBuildArtifacts@1
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              publishLocation: 'Container'
+              ArtifactName: Integration.Service-Build
+
+  - stage: 'Deploy_Dev'
+    displayName: 'Deploy to Dev'
+    dependsOn: Build
+    condition: succeeded()
+    pool:
+      vmImage: 'windows-latest'
+    jobs:
+      - job: 'Deploy_Service'
+        displayName: Deploy Service on Dev
+        steps:
+          - download: current
+            artifact: Integration.Service-Build
+
+          - task: AzureFunctionApp@2
+            inputs:
+              connectedServiceNameARM: 'Matas Dev/Test Operations'
+              appType: 'functionApp'
+              appName: 'func-test-weu-dev'
+              package: '$(Pipeline.Workspace)/Integration.Service-Build/*.zip'
+              deploymentMethod: 'runFromPackage'
