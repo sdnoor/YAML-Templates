@@ -1,0 +1,204 @@
+trigger:
+  branches:
+    include:
+      - QA  # Development branch
+      - main  # Production branch
+  paths:
+    include:
+      - test/src/test.Service/**
+      - test.Domain/**
+
+name: '$(Build.DefinitionName)-$(SourceBranchName)-$(rev:r)'
+
+# Variable groups for environment-specific configurations
+variables:
+  - group: 'Test-Dev'
+  
+  # Pipeline-specific variables
+  - name: buildConfiguration
+    value: 'Release'
+  - name: dotnetSdkVersion
+    value: '8.x'
+  - name: releaseBranchNameQA
+    value: 'QA'
+  - name: releaseBranchNameDev
+    value: 'develop'
+  - name: releaseBranchNameProd
+    value: 'main'
+  # Define pool at global level
+  - name: vmImageName
+    value: 'windows-latest'
+  # Define NuGet packages path for caching
+  - name: NUGET_PACKAGES
+    value: $(Pipeline.Workspace)/.nuget/packages
+
+# Global pool definition
+pool:
+  vmImage: $(vmImageName)
+
+stages:
+  - stage: 'Build'
+    displayName: 'test-Service-CI'
+    jobs:
+      - job: 'Build'
+        displayName: 'Build and Analyze .NET Code'
+        # Pool is inherited from global definition
+
+        steps:
+          # Prepare SonarQube analysis
+          - task: SonarQubePrepare@7
+            displayName: 'Prepare Analysis on SonarQube'
+            inputs:
+              SonarQube: '$(SonarQubeServiceConnectionName)'
+              scannerMode: 'dotnet'
+              projectKey: '$(SonarQubeProjectKey)'
+              projectName: '$(SonarQubeProjectName)'
+          
+          # Setup .NET SDK
+          - task: UseDotNet@2
+            displayName: 'Use .NET SDK $(dotnetSdkVersion)'
+            inputs:
+              packageType: 'sdk'
+              version: '$(dotnetSdkVersion)'
+            
+          # Cache NuGet packages to speed up builds
+          - task: Cache@2
+            displayName: 'Cache NuGet packages'
+            inputs:
+              key: 'nuget | "$(Agent.OS)" | **/test.Service.csproj | "$(dotnetSdkVersion)"'
+              restoreKeys: |
+                nuget | "$(Agent.OS)"
+                nuget
+              path: '$(NUGET_PACKAGES)'
+            
+          # Restore project dependencies
+          - task: DotNetCoreCLI@2
+            displayName: 'Restore project dependencies'
+            inputs:
+              azureSubscription: '$(ServiceConnectionName)'
+              command: 'restore'
+              projects: '$(Build.SourcesDirectory)/test/src/test.Service/test.Service.csproj'
+              vstsFeed: '$(NugetFeedId)'
+          
+          # Build the project
+          - task: DotNetCoreCLI@2
+            displayName: 'Build the project'
+            inputs:
+              azureSubscription: '$(ServiceConnectionName)'
+              command: 'build'
+              projects: '$(Build.SourcesDirectory)/test/src/test.Service/test.Service.csproj'
+              arguments: '--configuration $(buildConfiguration) --no-restore'
+          
+          # Run tests if they exist
+          - task: DotNetCoreCLI@2
+            displayName: 'Run unit tests'
+            inputs:
+              command: 'test'
+              projects: '$(Build.SourcesDirectory)/test/tests/**/*Tests.csproj'
+              arguments: '--configuration $(buildConfiguration) --no-build'
+            continueOnError: true
+
+          # Run SonarQube analysis
+          - task: SonarQubeAnalyze@7
+            displayName: 'Run Code Analysis'
+            continueOnError: true
+            inputs:
+              jdkversion: 'JAVA_HOME_17_X64'
+
+          # Publish SonarQube results
+          - task: SonarQubePublish@7
+            displayName: 'Publish Quality Gate Result'
+            continueOnError: true
+            inputs:
+              pollingTimeoutSec: '300'
+
+          # Publish the project
+          - task: DotNetCoreCLI@2
+            displayName: 'Publish the project'
+            inputs:
+              command: 'publish'
+              zipAfterPublish: true
+              publishWebProjects: false
+              projects: '$(Build.SourcesDirectory)/test/src/test.Service/test.Service.csproj'
+              arguments: '--configuration $(buildConfiguration) --output $(build.artifactstagingdirectory) --no-build'
+              
+          # Publish build artifacts
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Build Artifacts'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              publishLocation: 'Container'
+              ArtifactName: 'Test.Service-Build'
+
+  # Deploy to Development Environment
+  - stage: 'Deploy_Dev'
+    displayName: 'Deploy to Development'
+    dependsOn: Build
+    condition: |
+      and
+      (
+        succeeded(),
+        or(
+          eq(variables['Build.SourceBranchName'], variables['releaseBranchNameDev']),
+          eq(variables['Build.SourceBranchName'], variables['releaseBranchNameQA'])
+        )
+      )
+    variables:
+      - group: 'Test-Dev'  # Development environment variables
+    jobs:
+      - deployment: 'Deploy_Service'
+        displayName: 'Deploy Azure Function'
+        environment: 'Dev'
+        # Pool is inherited from global definition
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: Test.Service-Build
+                  
+                - task: AzureFunctionApp@2
+                  displayName: 'Deploy Azure Function App'
+                  inputs:
+                    connectedServiceNameARM: '$(ServiceConnectionName)'
+                    appType: functionAppLinux
+                    isFlexConsumption: true
+                    appName: 'func-$(IntegrationName)-swc-dev'
+                    resourceGroupName: '$(ResourceGroupName)'
+                    package: '$(Pipeline.Workspace)/Test.Service-Build/*.zip'
+                    deploymentMethod: 'runFromPackage'
+
+  # Deploy to Production Environment
+  - stage: 'Deploy_Prod'
+    displayName: 'Deploy to Production'
+    dependsOn: Build
+    condition: |
+      and
+      (
+        succeeded(),
+        eq(variables['Build.SourceBranchName'], variables['releaseBranchNameProd'])
+      )
+    variables:
+      - group: 'Test-Prod'  # Production environment variables
+    jobs:
+      - deployment: 'Deploy_Service'
+        displayName: 'Deploy Azure Function'
+        environment: 'Prod'  
+        # Pool is inherited from global definition
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: Test.Service-Build
+                  
+                - task: AzureFunctionApp@2
+                  displayName: 'Deploy Azure Function App'
+                  inputs:
+                    connectedServiceNameARM: '$(ServiceConnectionName)'
+                    appType: functionAppLinux
+                    isFlexConsumption: true
+                    appName: 'func-$(IntegrationName)-swc-prod'
+                    resourceGroupName: '$(ResourceGroupName)'
+                    package: '$(Pipeline.Workspace)/Test.Service-Build/*.zip'
+                    deploymentMethod: 'runFromPackage'

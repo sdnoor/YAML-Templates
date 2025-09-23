@@ -1,0 +1,238 @@
+# Azure DevOps Pipeline for Bicep Infrastructure Deployment
+# This pipeline builds, validates and deploys Bicep templates to multiple environments
+
+trigger:
+  # branches:
+  #   include:
+  #     - main
+  # paths:
+  #   include:
+  #     - IaC/*
+  #     - azure-pipelines.yml
+pool:
+  vmImage: 'ubuntu-latest'
+
+
+parameters:
+  - name: environment
+    displayName: 'Environment to deploy'
+    type: string
+    default: Dev
+    values:
+      - Dev
+      - Prod
+
+variables:
+  - group: Test-Dev
+  - name: bicepPath
+    value: '$(System.DefaultWorkingDirectory)/TestIntegration/IaC'
+  - name: buildOutputPath
+    value: '$(Build.ArtifactStagingDirectory)/TestIntegration/IaC'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Validate Bicep'
+    jobs:
+      - job: BuildValidateBicep
+        displayName: 'Build and Validate Bicep Templates'
+        steps:
+        - checkout: self
+          displayName: 'Checkout Code'
+          fetchDepth: 1
+          # Linting and validation for bicep files
+        - task: AzureCLI@2
+          displayName: 'Bicep Linting & Validation'
+          inputs:
+            azureSubscription: '$(ServiceConnectionName)'
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+                # Build resource group bicep file to ARM template
+                az bicep build --file $(bicepPath)/resourcegroup.bicep
+                # Build main bicep file to ARM template
+                az bicep build --file $(bicepPath)/main.bicep
+                
+                # Validate all bicep files
+                for file in $(find $(bicepPath) -name "*.bicep"); do
+                  echo "Validating $file"
+                  az bicep build --file $file --stdout > /dev/null
+                done
+
+          # Copy bicep files and parameter files to artifact staging directory
+        - task: CopyFiles@2
+          displayName: 'Copy Bicep Files to Artifact Staging'
+          inputs:
+            SourceFolder: '$(bicepPath)'
+            Contents: '**'
+            TargetFolder: '$(buildOutputPath)'
+
+          # Publish artifacts
+        - task: PublishBuildArtifacts@1
+          displayName: 'Publish Bicep Templates'
+          inputs:
+            PathtoPublish: '$(buildOutputPath)'
+            ArtifactName: 'BicepTemplates'
+            publishLocation: 'Container'
+
+  - stage: DeployToDev
+    displayName: 'Deploy to Dev'
+    dependsOn: Build
+    condition: and(succeeded(), eq('${{parameters.environment}}', 'Dev'))
+    variables:
+      - group: Test-Dev
+    jobs:
+      - deployment: DeployBicep
+        displayName: 'Deploy Bicep to Dev'
+        environment: 'Dev'
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Download artifacts
+                - task: DownloadBuildArtifacts@1
+                  displayName: 'Download Bicep Templates'
+                  inputs:
+                    buildType: 'current'
+                    downloadType: 'single'
+                    artifactName: 'BicepTemplates'
+                    downloadPath: '$(System.ArtifactsDirectory)'
+
+                # Replace tokens in parameter files
+                - task: qetza.replacetokens.replacetokens-task.replacetokens@6
+                  displayName: 'Replace Tokens in Parameter Files'
+                  inputs:
+                    root: '$(System.ArtifactsDirectory)/BicepTemplates'
+                    sources: |
+                      main.parameters.json
+                      resourcegroup.parameters.json
+                    tokenPattern: 'azpipelines'
+                    
+
+                # Deploy Resource Group
+                - task: AzureResourceManagerTemplateDeployment@3
+                  displayName: 'Deploy Resource Group'
+                  inputs:
+                    deploymentScope: 'Subscription'
+                    azureResourceManagerConnection: '$(ServiceConnectionName)'
+                    subscriptionId: '$(SubscriptionId)'
+                    location: '$(Location)'
+                    templateLocation: 'Linked artifact'
+                    csmFile: '$(System.ArtifactsDirectory)/BicepTemplates/resourcegroup.bicep'
+                    csmParametersFile: '$(System.ArtifactsDirectory)/BicepTemplates/resourcegroup.parameters.json'
+                    deploymentMode: 'Incremental'
+
+
+                # Deploy Infrastructure
+                - task: AzureResourceManagerTemplateDeployment@3
+                  displayName: 'Deploy Infrastructure'
+                  inputs:
+                    deploymentScope: 'Resource Group'
+                    azureResourceManagerConnection: '$(ServiceConnectionName)'
+                    subscriptionId: '$(SubscriptionId)'
+                    action: 'Create Or Update Resource Group'
+                    resourceGroupName: '$(ResourceGroupName)'
+                    location: '$(Location)'
+                    templateLocation: 'Linked artifact'
+                    csmFile: '$(System.ArtifactsDirectory)/BicepTemplates/main.bicep'
+                    csmParametersFile: '$(System.ArtifactsDirectory)/BicepTemplates/main.parameters.json'
+                    deploymentMode: 'Incremental'
+
+
+  - stage: DeployToProd
+    displayName: 'Deploy to Prod'
+    dependsOn: 
+      - Build
+    condition: and(succeeded(), eq('${{parameters.environment}}', 'Prod'))
+    variables:
+      - group: Test-Prod
+    jobs:
+      - deployment: DeployBicep
+        displayName: 'Deploy Bicep to Prod'
+        environment: 'Prod'
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Download artifacts
+                - task: DownloadBuildArtifacts@1
+                  displayName: 'Download Bicep Templates'
+                  inputs:
+                    buildType: 'current'
+                    downloadType: 'single'
+                    artifactName: 'BicepTemplates'
+                    downloadPath: '$(System.ArtifactsDirectory)'
+
+                # Replace tokens in parameter files
+                - task: qetza.replacetokens.replacetokens-task.replacetokens@6
+                  displayName: 'Replace Tokens in Parameter Files'
+                  inputs:
+                    root: '$(System.ArtifactsDirectory)/BicepTemplates'
+                    sources: |
+                      main.parameters.json
+                      resourcegroup.parameters.json
+                    tokenPattern: 'azpipelines'
+
+                # Deploy Resource Group
+                - task: AzureResourceManagerTemplateDeployment@3
+                  displayName: 'Deploy Resource Group'
+                  inputs:
+                    deploymentScope: 'Subscription'
+                    azureResourceManagerConnection: '$(ServiceConnectionName)'
+                    subscriptionId: '$(SubscriptionId)'
+                    location: '$(Location)'
+                    templateLocation: 'Linked artifact'
+                    csmFile: '$(System.ArtifactsDirectory)/BicepTemplates/resourcegroup.bicep'
+                    csmParametersFile: '$(System.ArtifactsDirectory)/BicepTemplates/resourcegroup.parameters.json'
+                    deploymentMode: 'Incremental'
+
+                - task: AzureCLI@2
+                  displayName: 'Check and Create Missing Key Vault Secrets'
+                  inputs:
+                    azureSubscription: 'Test Prod'
+                    scriptType: 'pscore'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                        $ErrorActionPreference = "Stop"
+                        
+                        $secretsToEnsure = @{
+                          "SftpUsername" = "$(SftpUsername)"
+                          "SftpPassword" = "$(SftpPassword)"
+                          "FileshareConnectionString" = "$(FileshareConnectionString)"
+                        }
+
+                        foreach ($secretName in $secretsToEnsure.Keys) {
+                          $secretValue = $secretsToEnsure[$secretName]
+                          if (-not $secretValue) {
+                            Write-Host "❌ No value found for $secretName. Skipping..."
+                            continue
+                          }
+                          $null = az keyvault secret show --vault-name $(KeyVaultName) --name $secretName --query "id" -o tsv 2>$null
+                          if ($LASTEXITCODE -eq 0) {
+                            Write-Host "✅ Secret already exists: $secretName"
+                          } else {
+                            Write-Host "🔧 Creating missing secret: $secretName"
+                            az keyvault secret set --vault-name $(KeyVaultName) --name $secretName --value "$secretValue"
+                            Write-Host "✅ Secret created: $secretName"
+                          }
+                        }
+
+                # Deploy Infrastructure
+                - task: AzureResourceManagerTemplateDeployment@3
+                  displayName: 'Deploy Infrastructure'
+                  inputs:
+                    deploymentScope: 'Resource Group'
+                    azureResourceManagerConnection: '$(ServiceConnectionName)'
+                    subscriptionId: '$(SubscriptionId)'
+                    action: 'Create Or Update Resource Group'
+                    resourceGroupName: '$(ResourceGroupName)'
+                    location: '$(Location)'
+                    templateLocation: 'Linked artifact'
+                    csmFile: '$(System.ArtifactsDirectory)/BicepTemplates/main.bicep'
+                    csmParametersFile: '$(System.ArtifactsDirectory)/BicepTemplates/main.parameters.json'
+                    deploymentMode: 'Incremental'
+                    deploymentOutputs: 'deploymentOutputs'
+
