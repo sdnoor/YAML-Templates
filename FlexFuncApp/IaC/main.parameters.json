@@ -1,0 +1,75 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "integrationName": {
+      "value": "$(integrationName)"
+    },
+    "location": {
+      "value": "$(location)"
+    },
+    "locationStorageAccount": {
+      "value": "$(locationStorageAccount)"
+    },
+    "environment": {
+      "value": "$(environment)"
+    },
+    "keyVaultName": {
+      "value": "$(keyVaultName)"
+    },
+    "keyvaultResourceGroupName": {
+      "value": "$(keyvaultResourceGroupName)"
+    },
+    "spSkuName": {
+      "value": "$(spSkuName)"
+    },
+    "spSkuTier": {
+      "value": "$(spSkuTier)"
+    },
+    "vnetName": {
+      "value": "$(vnetName)"
+    },
+    "subnetName": {
+      "value": "$(subnetName)"
+    },
+    "subnetPrefix": {
+      "value": "$(subnetPrefix)"
+    },
+    "vnetPrefix": {
+      "value": "$(vnetPrefix)"
+    },
+    "storageAccountIntegrationName": {
+      "value": "$(storageAccountIntegrationName)"
+    },
+    "serviceBusResourceGroup": {
+      "value": "$(serviceBusResourceGroup)"
+    },
+    "serviceBusSubscriptionId": {
+      "value": "$(serviceBusSubscriptionId)"
+    },
+    "integrationNameStorageAccount": {
+      "value": "$(integrationNameStorageAccount)"
+    },
+    "integrationNameServiceBus": {
+      "value": "$(integrationNameServiceBus)"
+    },
+    "applicationName": {
+      "value": "$(applicationName)"
+    },
+    "sftpUsernameSecretName": {
+      "value": "$(sftpUsernameSecretName)"
+    },
+    "sftpPasswordSecretName": {
+      "value": "$(sftpPasswordSecretName)"
+    },
+    "datalakeName": {
+      "value": ""
+    },
+    "datalakeStorageResourceGroupName": {
+      "value": ""
+    },
+    "datalakeStorageSubscriptionId": {
+      "value": ""
+    }
+  }
+}
